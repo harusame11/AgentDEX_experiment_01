@@ -1,0 +1,4 @@
+{
+  "deepseek-chat": [],
+  "vllm_model_config_path": "api_config.json"
+}

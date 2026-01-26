@@ -253,7 +253,7 @@ class DenseRetriever(BaseRetriever):
         # 创建 API 配置字典
         api_config = {
             'model_name':"Qwen/Qwen3-Embedding-8B",
-            'embedding_dim': 1024
+            'embedding_dim': 4096
         }
 
         self.encoder = Encoder(
@@ -357,7 +357,7 @@ class Config:
             retrieval_batch_size: int = 128,
             new_cache_dir: str = None,
             example_id_file: str = None,
-            tavily_key: str = None,
+            tavily_key: str = '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',
             use_api: bool = None,
             api_model_name: str = None,
             api_embedding_dim: int = 4096
@@ -429,16 +429,24 @@ def retrieve_endpoint(request: QueryRequest):
             resp.append(combined)
         else:
             resp.append(single_result)
+            
     if len(resp[0]) < request.topk:
-        needed = request.topk - len(resp[0])
-
         try:
             response = tavily_client.search(
                 query=request.queries[0],
                 search_depth="advanced",
-                max_results=needed,
+                max_results=20,
                 chunks_per_source=5
             )
+            num_results = len(response.get('results', []))
+            print(f"\n=== Tavily搜索结果 ===", flush=True)
+            print(f"查询: {request.queries[0]}", flush=True)
+            print(f"搜索到的文章数量: {num_results}", flush=True)
+            print(f"\n前3篇文章的相关性排名:", flush=True)
+            for i, result in enumerate(response.get('results', [])[:3]):
+                print(f"  [{i+1}] 相关性分数: {result.get('score', 'N/A'):.4f}", flush=True)
+                print(f"      标题: {result.get('title', 'N/A')[:80]}", flush=True)
+            print("=" * 50 + "\n", flush=True)
         except Exception as tavily_search_error:
             return resp
         if not os.path.isdir(os.path.join(config.new_cache_dir,request.eid)):
@@ -446,8 +454,8 @@ def retrieve_endpoint(request: QueryRequest):
         search_idx = 0
         while os.path.isfile(os.path.join(config.new_cache_dir,request.eid,f"search_{search_idx}.json")):
             search_idx += 1
-        with open(os.path.join(config.new_cache_dir,request.eid,f"search_{search_idx}.json"),'w',encoding='utf-8') as f:
-            json.dump(response,f,indent=2,ensure_ascii=False)
+        with open(os.path.join(config.new_cache_dir,request.eid,f"search_{search_idx}.json"),'w') as f:
+            json.dump(response,f,indent=2)
 
         def extract_web(extract_argument):
             try:
@@ -520,7 +528,7 @@ config = Config(
     retrieval_batch_size=512,
     new_cache_dir=args.new_cache_dir,
     example_id_file=args.example_id_file,
-    tavily_key="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",
+    tavily_key="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",
     use_api=args.use_api,
     api_model_name=args.api_model_name,
     api_embedding_dim=4096

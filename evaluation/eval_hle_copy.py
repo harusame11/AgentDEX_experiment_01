@@ -118,8 +118,11 @@ def call_tool(arguments):
 
         response = get_llm_response(
             model_alias=model_name,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3
+            messages=[
+                {"role": "system", "content": "请写可执行的python代码"},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.2
         )
         
         if isinstance(response,str):
@@ -180,7 +183,7 @@ def call_tool(arguments):
         response = get_llm_response(
             model_alias=model_name,
             messages=messages,
-            temperature=0.3
+            temperature=0.2
         )
         if isinstance(response,str):
             arguments['response'] = ''
@@ -228,10 +231,13 @@ def call_tool(arguments):
         try:
             response = get_llm_response(
                 model_alias=cur_query_writer,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3
+                messages=[
+                    {"role": "system", "content": "你是一个搜索查询生成助手，请根据问题生成合适的搜索关键词。"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.2
             )
-        
+
             if isinstance(response, str):
             # API 调用失败
                 query_to_call = arguments['problem']
@@ -245,10 +251,53 @@ def call_tool(arguments):
         except Exception as e:
             print(f"Search query generation failed: {e}")
             query_to_call = arguments['problem']
-        
+
+        # 调用本地 retrieval API
+        if query_to_call and len(query_to_call) >= 5:
+            payload = {
+                "queries": [query_to_call[:390]],
+                "topk": 5,
+                "return_scores": True,
+                "eid": arguments['id']
+            }
+            result = None
+
+            try:
+                result = requests.post('http://127.0.0.1:8001/retrieve', json=payload, timeout=300).json()  # 增加到 5 分钟，因为 Tavily extract 很慢
+                if result and len(result) > 0 and len(result[0]) > 0:
+                    faiss_results = [r for r in result[0] if r.get('score', 0) >= 0]
+                    tavily_results = [r for r in result[0] if r.get('score', 0) < 0]
+                    faiss_sorted = sorted(
+                        faiss_results,
+                        key = lambda x: x.get('socre', 0),
+                        reverse=True
+                    )
+                    tavily_sorted = sorted(
+                        tavily_results,
+                        key=lambda x: x.get('tavily_score', 0),
+                        reverse=True
+                    )
+                    sorted_results = faiss_sorted + tavily_sorted
+                    print(f"\n📊 检索返回 {len(sorted_results)} 个结果，按相关性排序:")
+                    for idx, r in enumerate(sorted_results[:3]):
+                        score = r.get('score', 0)
+                        if score < 0:
+                            score = r.get('tavily_score')
+                        doc_preview = r.get('document', {}).get('content', '')[:60] if 'document' in r else 'N/A'
+                        print(f"  #{idx+1}: score={score:.3f}, preview={doc_preview}...")
+
+                    for r in result[0]:
+                        if 'document' in r and 'content' in r['document']:
+                            contents.append(r['document']['content'])
+                        elif 'document' in r and 'contents' in r['document']:
+                            contents.append(r['document']['contents'])
+            except Exception as search_error:
+                print(f"Retrieval API failed: {search_error}")
+
+
     
             # ✅ 使用 Tavily 搜索
-        if query_to_call and len(query_to_call) >= 5:
+        '''if query_to_call and len(query_to_call) >= 5:
             query_to_call = query_to_call[:500]
             search_results =None
 
@@ -256,7 +305,7 @@ def call_tool(arguments):
                 # Tavily search API
                 search_results = tavily_client.search(
                     query=query_to_call,
-                    max_results=50,
+                    max_results=25,
                     search_depth="advanced",
                     include_answer=True,
                     include_raw_content=True
@@ -285,7 +334,7 @@ def call_tool(arguments):
                         elif 'snippet' in result:
                             contents.append(result['snippet'])
             except Exception as e:
-                print(f"Tavily search failed: {e}")
+                print(f"Tavily search failed: {e}")'''
         
         arguments['query'] = query_to_call
         arguments['search_results_data'] = contents
@@ -431,14 +480,13 @@ def run_single(e):
         cur_tool_set = [t['function']['name'] for t in updated_tools]
         chat = [
                     {"role": "system", "content": "You are good at using tools."},
-                    {"role": "user", "content": f"Problem: {problem}\n\n{context_str}\n\nChoose an appropriate tool.'"}
+                    {"role": "user", "content": f"Problem: {problem}\n\n{context_str}\n\nChoose an appropriate tool to solve problem.'"}
                 ]
         response = get_llm_response(
             model_alias="orchestrator-1",
             messages=chat,
             tools=raw_tools,
             temperature=1,
-            
             )
         
         cache_idx = 0
@@ -510,8 +558,11 @@ def run_single(e):
                     max_code_length = 20000
                     max_context_length = 30000
                 elif 'Pro/zai-org/GLM-4.7' in expert_model_to_call.lower():
-                    max_code_length = 20000
+                    max_code_length = 40000
                     max_context_length = 80000
+                else:
+                    max_code_length = 16000
+                    max_context_length = 24000
                 doc_str = ''
                 for doc_idx, doc in enumerate(doc_list):
                     if 'Qwen/Qwen2.5-Coder-32B-Instruct' in expert_model_to_call.lower():
